@@ -1,67 +1,41 @@
-# bbu_node.py
 # ==========================================
-# SIMULASI BBU / GROUND SYSTEM NODE
-# - Terima TM dari Satelit (UDP)
-# - Simulasi visibility window (LEO pass)
-# - Simulasi RF effects: loss, noise, propagation
-# - Buffer telemetry
-# - Terima TC dari Web (TCP)
-# - Queue TC & kirim ke satelit saat visible
+# SIMULASI BBU NODE (FINAL STABLE)
 # ==========================================
 
 import socket
 import threading
 import time
 import random
-import math
 
-# ==========================================
-# NETWORK CONFIG
-# ==========================================
 BBU_IP = "127.0.0.1"
 
-# UDP: Satellite <-> BBU
-BBU_TM_PORT = 6001        # receive TM from satellite
-BBU_TC_PORT = 6002        # send TC to satellite
+# Satellite
+BBU_TM_PORT = 6001
 SAT_IP = "127.0.0.1"
 SAT_TC_PORT = 5002
 
-# TCP: BBU <-> Web
-BBU_WEB_PORT = 7001
+# Web
+BBU_TC_PORT = 7001   # Web -> BBU (TC)
+BBU_TM_PORT_WEB = 7002  # BBU -> Web (TM)
 
-# ==========================================
-# VISIBILITY WINDOW (SIMPLIFIED)
-# ==========================================
-PASS_PERIOD = 120         # detik (simulasi orbit cepat)
-PASS_DURATION = 40        # detik visible
+PASS_PERIOD = 120
+PASS_DURATION = 40
+PACKET_LOSS_PROB = 0.1
+PROP_DELAY = 0.2
 
-# ==========================================
-# RF CHANNEL PARAMETERS (rf_like)
-# ==========================================
-PACKET_LOSS_PROB = 0.1    # 10% TM loss
-PROP_DELAY = 0.2          # detik delay propagasi
-
-# ==========================================
-# GLOBAL STATE
-# ==========================================
 telemetry_buffer = []
 telecommand_queue = []
 visible = False
 running = True
+web_tm_conn = None
 
-# ==========================================
-# VISIBILITY LOGIC
 # ==========================================
 def visibility_manager():
     global visible
-    print("[BBU] Visibility manager started")
     while running:
-        t = int(time.time()) % PASS_PERIOD
-        visible = t < PASS_DURATION
+        visible = (int(time.time()) % PASS_PERIOD) < PASS_DURATION
         time.sleep(1)
 
-# ==========================================
-# TM RECEIVER (FROM SATELLITE)
 # ==========================================
 def tm_receiver():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -70,37 +44,44 @@ def tm_receiver():
 
     while running:
         data, _ = sock.recvfrom(1024)
-        msg = data.decode()
-
         if not visible:
-            continue  # satellite not visible
-
-        # Simulate packet loss
+            continue
         if random.random() < PACKET_LOSS_PROB:
             print("[BBU] TM dropped (RF loss)")
             continue
 
         time.sleep(PROP_DELAY)
-        telemetry_buffer.append(msg)
-        print(f"[BBU] TM RX -> buffer: {msg}")
+        tm = data.decode()
+        telemetry_buffer.append(tm)
+        print(f"[BBU] TM RX -> buffer: {tm}")
 
 # ==========================================
-# TM FORWARDER (TO WEB)
-# ==========================================
-def tm_forwarder():
+def tm_server_for_web():
+    global web_tm_conn
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    server.bind((BBU_IP, BBU_TM_PORT_WEB))
+    server.listen(1)
+    print("[BBU] TM server for Web listening on 7002")
+
+    web_tm_conn, _ = server.accept()
+    print("[BBU] Web connected for TM")
+
     while running:
-        if telemetry_buffer:
+        if telemetry_buffer and visible:
             tm = telemetry_buffer.pop(0)
-            print(f"[BBU] TM forwarded to Web: {tm}")
-        time.sleep(0.5)
+            try:
+                web_tm_conn.sendall(tm.encode())
+                print(f"[BBU] TM sent to Web: {tm}")
+            except:
+                telemetry_buffer.insert(0, tm)
+                print("[BBU] Web disconnected")
+                break
+        time.sleep(1)
 
-# ==========================================
-# TC SENDER (TO SATELLITE)
 # ==========================================
 def tc_sender():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    print("[BBU] TC sender ready")
-
     while running:
         if telecommand_queue and visible:
             tc = telecommand_queue.pop(0)
@@ -109,24 +90,19 @@ def tc_sender():
         time.sleep(1)
 
 # ==========================================
-# TC RECEIVER (FROM WEB via TCP)
-# ==========================================
 def tc_receiver_from_web():
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind((BBU_IP, BBU_WEB_PORT))
+    sock.bind((BBU_IP, BBU_TC_PORT))
     sock.listen(1)
-    print("[BBU] Waiting TC from Web (TCP)")
+    print("[BBU] Waiting TC from Web")
 
     while running:
-        conn, addr = sock.accept()
-        data = conn.recv(1024)
-        tc = data.decode()
+        conn, _ = sock.accept()
+        tc = conn.recv(1024).decode()
         telecommand_queue.append(tc)
         print(f"[BBU] TC queued from Web: {tc}")
         conn.close()
 
-# ==========================================
-# MAIN
 # ==========================================
 if __name__ == "__main__":
     print("=== BBU NODE STARTED ===")
@@ -134,7 +110,7 @@ if __name__ == "__main__":
     threads = [
         threading.Thread(target=visibility_manager, daemon=True),
         threading.Thread(target=tm_receiver, daemon=True),
-        threading.Thread(target=tm_forwarder, daemon=True),
+        threading.Thread(target=tm_server_for_web, daemon=True),
         threading.Thread(target=tc_sender, daemon=True),
         threading.Thread(target=tc_receiver_from_web, daemon=True),
     ]
@@ -148,4 +124,3 @@ if __name__ == "__main__":
             time.sleep(3)
     except KeyboardInterrupt:
         running = False
-        print("\n[BBU] Shutting down")
