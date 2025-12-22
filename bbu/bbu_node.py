@@ -7,6 +7,8 @@ import threading
 import time
 import random
 
+from common.orbit import is_visible
+
 BBU_IP = "127.0.0.1"
 
 # Satellite
@@ -44,16 +46,10 @@ def tm_receiver():
 
     while running:
         data, _ = sock.recvfrom(1024)
-        if not visible:
-            continue
-        if random.random() < PACKET_LOSS_PROB:
-            print("[BBU] TM dropped (RF loss)")
-            continue
-
-        time.sleep(PROP_DELAY)
         tm = data.decode()
         telemetry_buffer.append(tm)
         print(f"[BBU] TM RX -> buffer: {tm}")
+
 
 # ==========================================
 def tm_server_for_web():

@@ -1,65 +1,93 @@
 # satellite_node.py
-# ================================
-# Simulasi NODE SATELIT LEO
-# - Kirim Telemetry (TM) via UDP ke BBU
-# - Terima Telecommand (TC) via UDP dari BBU
-# - Hitung efek Doppler sederhana
-# - Tidak tahu apa-apa soal Web / TCP
+# ==========================================
+# SIMULASI SATELLITE NODE (LEO)
+# - Generate Telemetry (TM)
+# - Apply Doppler (orbit model)
+# - Apply RF channel effects
+# - Send TM to BBU (UDP)
+# - Receive TC from BBU (UDP)
+# =========================================
 
 import socket
 import time
 import math
 import threading
 
+from common.orbit import doppler_shift
+from common.rf_channel import propagate
+
 # ================================
 # KONFIGURASI JARINGAN
 # ================================
+# SAT_IP = "127.0.0.1"
+
+# SAT_TC_PORT = 5002      # TC masuk dari BBU
+# BBU_IP = "127.0.0.1"
+# BBU_TM_PORT = 6001      # Port TM listener di BBU
+
+# ==========================================
+# NETWORK CONFIG
+# ==========================================
 SAT_IP = "127.0.0.1"
-SAT_TM_PORT = 5001      # TM keluar ke BBU
-SAT_TC_PORT = 5002      # TC masuk dari BBU
+SAT_TC_PORT = 5002          # receive TC from BBU
+#SAT_TM_PORT = 5001          # TM keluar ke BBU
+
 BBU_IP = "127.0.0.1"
-BBU_TM_PORT = 6001      # Port TM listener di BBU
+BBU_TM_PORT = 6001          # send TM to BBU
+
+TM_INTERVAL = 1.0           # seconds
+running = True
 
 # ================================
 # PARAMETER ORBIT (SIMPLIFIED)
 # ================================
-ORBIT_PERIOD = 5400     # detik (90 menit)
-MAX_DOPPLER = 5000      # Hz (contoh LEO)
-TM_INTERVAL = 1.0       # detik
+# ORBIT_PERIOD = 5400     # detik (90 menit)
+# MAX_DOPPLER = 5000      # Hz (contoh LEO)
+# TM_INTERVAL = 1.0       # detik
 
-seq_tm = 0
-running = True
+# seq_tm = 0
+# running = True
 
 # ================================
 # FUNGSI DOPPLER SIMPLIFIED
 # ================================
-def compute_doppler(t):
-    """
-    Doppler sinusoidal sederhana
-    Positif saat mendekat, negatif saat menjauh
-    """
-    phase = 2 * math.pi * (t % ORBIT_PERIOD) / ORBIT_PERIOD
-    return int(MAX_DOPPLER * math.sin(phase))
+# def compute_doppler(t):
+#    """
+#    Doppler sinusoidal sederhana
+#    Positif saat mendekat, negatif saat menjauh
+#    """
+#    phase = 2 * math.pi * (t % ORBIT_PERIOD) / ORBIT_PERIOD
+#    return int(MAX_DOPPLER * math.sin(phase))
 
 # ================================
 # THREAD: KIRIM TELEMETRY
 # ================================
 def telemetry_sender():
-    global seq_tm
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    seq = 0
 
     print("[SAT] Telemetry sender started")
-    t0 = time.time()
 
     while running:
-        t = time.time() - t0
-        doppler = compute_doppler(t)
+        tm_packet = {
+            "seq": seq,
+            "doppler": doppler_shift(),
+            "corrupted": False
+        }
 
-        tm_msg = f"TM,{seq_tm},{doppler}"
-        sock.sendto(tm_msg.encode(), (BBU_IP, BBU_TM_PORT))
+        # Apply RF channel
+        tm_packet = propagate(tm_packet)
 
-        print(f"[SAT] TM seq={seq_tm} doppler={doppler}")
-        seq_tm += 1
+        if tm_packet:
+            sock.sendto(
+                str(tm_packet).encode(),
+                (BBU_IP, BBU_TM_PORT)
+            )
+            print(f"[SAT] TM sent: {tm_packet}")
+        else:
+            print("[SAT] TM lost (RF)")
+
+        seq += 1
         time.sleep(TM_INTERVAL)
 
 # ================================
@@ -74,7 +102,7 @@ def telecommand_receiver():
     while running:
         data, addr = sock.recvfrom(1024)
         tc = data.decode()
-        print(f"[SAT] TC received: {tc}")
+        print(f"[SAT] TC received from BBU: {tc}")
 
 # ================================
 # MAIN
