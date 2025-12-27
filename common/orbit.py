@@ -9,8 +9,8 @@ import time
 # =====================================================
 # ORBIT CONFIG
 # =====================================================
-ORBIT_PERIOD = 90 * 60        # 90 menit
-PASS_DURATION = 10 * 60       # 10 menit visible
+ORBIT_PERIOD = 5 * 60        # 90 menit
+PASS_DURATION = 2 * 60       # 10 menit visible
 MAX_DOPPLER = 5000            # Hz
 
 # =====================================================

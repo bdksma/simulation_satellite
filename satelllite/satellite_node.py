@@ -13,7 +13,7 @@ import time
 import math
 import threading
 
-from common.orbit import doppler_shift
+from common.orbit import doppler_shift, is_visible
 from common.rf_channel import propagate
 
 # ================================
@@ -66,26 +66,25 @@ def telemetry_sender():
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     seq = 0
 
-    print("[SAT] Telemetry sender started")
-
     while running:
+        visible = is_visible()
+
         tm_packet = {
             "seq": seq,
             "doppler": doppler_shift(),
+            "visible": visible,
             "corrupted": False
         }
 
-        # Apply RF channel
-        tm_packet = propagate(tm_packet)
-
-        if tm_packet:
-            sock.sendto(
-                str(tm_packet).encode(),
-                (BBU_IP, BBU_TM_PORT)
-            )
-            print(f"[SAT] TM sent: {tm_packet}")
+        if visible:
+            tm_packet = propagate(tm_packet)
+            if tm_packet:
+                sock.sendto(str(tm_packet).encode(), (BBU_IP, BBU_TM_PORT))
+                print(f"[SAT] TM SENT: {tm_packet}")
+            else:
+                print("[SAT] TM LOST (RF)")
         else:
-            print("[SAT] TM lost (RF)")
+            print("[SAT] TM Generated (NOT Visible)")
 
         seq += 1
         time.sleep(TM_INTERVAL)
@@ -102,7 +101,11 @@ def telecommand_receiver():
     while running:
         data, addr = sock.recvfrom(1024)
         tc = data.decode()
-        print(f"[SAT] TC received from BBU: {tc}")
+
+        if is_visible():
+            print(f"[SAT] TC EXECUTED: {tc}")
+        else:
+            print(f"[SAT] TC RECEIVED but NOT VISIBLE: {tc}")
 
 # ================================
 # MAIN

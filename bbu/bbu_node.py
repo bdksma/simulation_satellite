@@ -20,22 +20,21 @@ SAT_TC_PORT = 5002
 BBU_TC_PORT = 7001   # Web -> BBU (TC)
 BBU_TM_PORT_WEB = 7002  # BBU -> Web (TM)
 
-PASS_PERIOD = 120
-PASS_DURATION = 40
+
 PACKET_LOSS_PROB = 0.1
 PROP_DELAY = 0.2
 
-telemetry_buffer = []
+telemetry_live = []        # current pass
+telemetry_history = []    # past passes
 telecommand_queue = []
 visible = False
 running = True
 web_tm_conn = None
 
-# ==========================================
 def visibility_manager():
     global visible
     while running:
-        visible = (int(time.time()) % PASS_PERIOD) < PASS_DURATION
+        visible = is_visible()
         time.sleep(1)
 
 # ==========================================
@@ -47,8 +46,14 @@ def tm_receiver():
     while running:
         data, _ = sock.recvfrom(1024)
         tm = data.decode()
-        telemetry_buffer.append(tm)
-        print(f"[BBU] TM RX -> buffer: {tm}")
+
+        telemetry_history.append(tm)
+
+        if visible:
+            telemetry_live.append(tm)
+            print(f"[BBU] TM RX (LIVE): {tm}")
+        else:
+            print(f"[BBU] TM RX (HIST): {tm}")
 
 
 # ==========================================
@@ -58,31 +63,53 @@ def tm_server_for_web():
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server.bind((BBU_IP, BBU_TM_PORT_WEB))
     server.listen(1)
-    print("[BBU] TM server for Web listening on 7002")
 
+    print("[BBU] TM server for Web listening on 7002")
     web_tm_conn, _ = server.accept()
     print("[BBU] Web connected for TM")
 
     while running:
-        if telemetry_buffer and visible:
-            tm = telemetry_buffer.pop(0)
-            try:
-                web_tm_conn.sendall(tm.encode())
-                print(f"[BBU] TM sent to Web: {tm}")
-            except:
-                telemetry_buffer.insert(0, tm)
-                print("[BBU] Web disconnected")
-                break
+        if visible and telemetry_live:
+            tm = telemetry_live.pop(0)
+            msg = f"LIVE|{tm}"
+        elif telemetry_history:
+            tm = telemetry_history[-1]   # last known
+            msg = f"HIST|{tm}"
+        else:
+            time.sleep(1)
+            continue
+
+        try:
+            web_tm_conn.sendall(msg.encode())
+            print(f"[BBU] TM sent to Web: {msg}")
+        except:
+            print("[BBU] Web disconnected")
+            break
+
         time.sleep(1)
 
 # ==========================================
 def tc_sender():
+    global visible
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    print("[BBU] TC sender started")
+
     while running:
-        if telecommand_queue and visible:
-            tc = telecommand_queue.pop(0)
-            sock.sendto(tc.encode(), (SAT_IP, SAT_TC_PORT))
-            print(f"[BBU] TC sent to satellite: {tc}")
+        if not telecommand_queue:
+            time.sleep(0.5)
+            continue
+
+        if not visible:
+            print("[BBU] TC queued, waiting visibility")
+            time.sleep(1)
+            continue
+
+        # === VISIBILITY TRUE ===
+        tc = telecommand_queue.pop(0)
+        sock.sendto(tc.encode(), (SAT_IP, SAT_TC_PORT))
+        print(f"[BBU] TC SENT to satellite: {tc}")
+
         time.sleep(1)
 
 # ==========================================
@@ -116,7 +143,12 @@ if __name__ == "__main__":
 
     try:
         while True:
-            print(f"[BBU] Visible={visible} | TM_buffer={len(telemetry_buffer)} | TC_queue={len(telecommand_queue)}")
+            print(
+                    f"[BBU] Visible={is_visible()} | "
+                    f"LIVE={len(telemetry_live)} | "
+                    f"HIST={len(telemetry_history)} | "
+                    f"TC={len(telecommand_queue)}"
+                )
             time.sleep(3)
     except KeyboardInterrupt:
         running = False
